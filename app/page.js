@@ -167,26 +167,21 @@ async function api(path, method = "GET", body) {
 }
 
 // ── Board canvas — always white circle, light black threads ───────────────────
-function Board({ sequence, step, view, onView }) {
-  const baseRef = useRef(null), overRef = useRef(null), wrapRef = useRef(null);
-  const [sz, setSz] = useState(600);
-  const committedTo = useRef(0), lastViewKey = useRef("");
+// No pan/zoom. Board fills the container as a perfect square.
+function Board({ sequence, step, sz: szProp }) {
+  const baseRef = useRef(null), overRef = useRef(null);
+  const sz = szProp || 300;
+  const committedTo = useRef(0), lastSzStep = useRef("");
   const DPR = Math.min(typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1, 2);
   const L = 1000, cx = 500, cy = 500, R = 474;
   const pins = useMemo(() => pinPositions(PIN_COUNT, R, cx, cy), []);
 
-  useEffect(() => {
-    if (!wrapRef.current) return;
-    const ro = new ResizeObserver(([e]) => { const s = Math.min(e.contentRect.width, e.contentRect.height); if (s > 0) setSz(s); });
-    ro.observe(wrapRef.current); return () => ro.disconnect();
-  }, []);
-
   const applyXform = useCallback((ctx) => {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    const scale = (sz / L) * view.zoom;
-    ctx.translate(sz / 2 + view.x, sz / 2 + view.y);
+    const scale = sz / L;
+    ctx.translate(sz / 2, sz / 2);
     ctx.scale(scale, scale); ctx.translate(-cx, -cy);
-  }, [DPR, sz, view.zoom, view.x, view.y]);
+  }, [DPR, sz]);
 
   // Board always white with subtle shadow border
   const paintBoard = useCallback((ctx) => {
@@ -231,19 +226,21 @@ function Board({ sequence, step, view, onView }) {
   }, [applyXform, pins, sequence]);
 
   useEffect(() => {
-    const key = `${sz}|${view.zoom}|${view.x}|${view.y}`;
-    const viewChanged = key !== lastViewKey.current; lastViewKey.current = key;
-    if (viewChanged) { committedTo.current = 0; repaintBase(step); return; }
+    const key = `${sz}|${step}`;
+    if (key === lastSzStep.current && step === committedTo.current) return;
+    const szChanged = sz !== parseInt(lastSzStep.current);
+    lastSzStep.current = `${sz}`;
+    if (szChanged) { committedTo.current = 0; repaintBase(step); return; }
     if (step > committedTo.current) appendBase(committedTo.current, step);
     else if (step < committedTo.current) repaintBase(step);
-  }, [step, sz, view.zoom, view.x, view.y, repaintBase, appendBase]);
+  }, [step, sz, repaintBase, appendBase]);
 
   useEffect(() => {
     const c = overRef.current; if (!c) return;
     const ctx = c.getContext("2d");
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
     applyXform(ctx);
-    const scale = (sz / L) * view.zoom;
+    const scale = sz / L;
     const cur = (step > 0 && step <= sequence.length) ? sequence[step-1] : null;
     // Current thread — gold glow
     if (cur) {
@@ -255,7 +252,7 @@ function Board({ sequence, step, view, onView }) {
       ctx.shadowBlur = 0;
     }
     const active = new Set(cur ? [cur[0], cur[1]] : []);
-    // Pins
+    // Pins — only show active pin labels always; others only when zoomed
     for (let i = 0; i < PIN_COUNT; i++) {
       const [x, y] = pins[i]; const on = active.has(i+1);
       ctx.beginPath(); ctx.arc(x, y, on ? 5.5 : 2.2, 0, Math.PI * 2);
@@ -263,34 +260,24 @@ function Board({ sequence, step, view, onView }) {
       else { ctx.fillStyle = "rgba(20,20,40,0.4)"; }
       ctx.fill(); ctx.shadowBlur = 0;
     }
-    // Labels
-    if (scale > 0.5) {
-      for (let i = 0; i < PIN_COUNT; i++) {
-        const on = active.has(i+1); if (!on && scale < 0.85) continue;
-        const ang = (i / PIN_COUNT) * Math.PI * 2 - Math.PI / 2;
-        const lx = cx + Math.cos(ang) * (R + 14), ly = cy + Math.sin(ang) * (R + 14);
-        ctx.save(); ctx.translate(lx, ly); ctx.scale(1/scale, 1/scale);
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillStyle = on ? C.gold : "rgba(20,20,40,0.45)";
-        ctx.font = `${on ? 700 : 400} 11px ui-monospace,monospace`;
-        ctx.fillText(String(i+1), 0, 0); ctx.restore();
-      }
+    // Always show active pin labels
+    for (let i = 0; i < PIN_COUNT; i++) {
+      const on = active.has(i+1); if (!on) continue;
+      const ang = (i / PIN_COUNT) * Math.PI * 2 - Math.PI / 2;
+      const lx = cx + Math.cos(ang) * (R + 14), ly = cy + Math.sin(ang) * (R + 14);
+      ctx.save(); ctx.translate(lx, ly); ctx.scale(1/scale, 1/scale);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = C.gold;
+      ctx.font = `700 11px ui-monospace,monospace`;
+      ctx.fillText(String(i+1), 0, 0); ctx.restore();
     }
-  }, [step, sz, view.zoom, view.x, view.y, applyXform, pins, sequence]);
+  }, [step, sz, applyXform, pins, sequence]);
 
-  const drag = useRef(null);
   const CA = { width: sz * DPR, height: sz * DPR, style: { width: sz, height: sz, position: "absolute", top: 0, left: 0 } };
   return (
-    <div ref={wrapRef} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: `radial-gradient(circle at center, ${C.bgPanel} 0%, ${C.bgDeep} 100%)`, borderRadius: 16, overflow: "hidden", minHeight: 0, border: `1px solid ${C.borderDark}` }}>
-      <div style={{ position: "relative", width: sz, height: sz }}>
-        <canvas ref={baseRef} {...CA} />
-        <canvas ref={overRef} {...CA} style={{ ...CA.style, touchAction: "none", cursor: "grab" }}
-          onPointerDown={e => { drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; e.currentTarget.setPointerCapture(e.pointerId); }}
-          onPointerMove={e => { if (!drag.current) return; onView(v => ({ ...v, x: drag.current.vx + e.clientX - drag.current.x, y: drag.current.vy + e.clientY - drag.current.y })); }}
-          onPointerUp={e => { drag.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {} }}
-          onWheel={e => { e.preventDefault(); const f = e.deltaY < 0 ? 1.12 : 1/1.12; onView(v => ({ ...v, zoom: Math.max(0.4, Math.min(12, v.zoom * f)) })); }}
-        />
-      </div>
+    <div style={{ width: sz, height: sz, position: "relative", borderRadius: "50%", overflow: "hidden" }}>
+      <canvas ref={baseRef} {...CA} />
+      <canvas ref={overRef} {...CA} style={{ ...CA.style }} />
     </div>
   );
 }
@@ -440,17 +427,30 @@ function PublicArt() {
   return <canvas ref={ref} width={180} height={180} style={{ borderRadius: "50%", boxShadow: `0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px ${C.goldBorder}` }} />;
 }
 
-// ── Public viewer ──────────────────────────────────────────────────────────────
+// ── Public viewer — full screen, no scroll, app-like layout ─────────────────
 function PublicViewer({ project, onBack }) {
   const seq = project.sequence || [];
   const total = seq.length;
   const [step, setStep] = useState(project.step || 0);
   const [playing, setPlaying] = useState(false);
   const [intervalSec, setIntervalSec] = useState(project.interval_sec || 2);
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
   const [jump, setJump] = useState("");
   const pct = total ? ((step / total) * 100).toFixed(1) : "0.0";
   const cur = (step > 0 && step <= total) ? seq[step-1] : null;
+
+  // Board size: compute once from window, stable square that fills available width
+  const [boardSz, setBoardSz] = useState(() => {
+    if (typeof window === "undefined") return 300;
+    return Math.min(window.innerWidth, window.innerHeight * 0.52) - 24;
+  });
+
+  useEffect(() => {
+    const update = () => {
+      setBoardSz(Math.min(window.innerWidth, window.innerHeight * 0.52) - 24);
+    };
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   useEffect(() => {
     if (!playing) return;
@@ -474,84 +474,177 @@ function PublicViewer({ project, onBack }) {
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, [total]);
 
+  // Build pin strip — show current pin and 3 on each side
+  const pinStrip = useMemo(() => {
+    if (!cur) return [];
+    const pins = [];
+    // Collect unique pins from nearby steps
+    for (let i = Math.max(0, step - 4); i < Math.min(total, step + 4); i++) {
+      const p = seq[i][i === step - 1 ? 1 : 0];
+      if (!pins.includes(p)) pins.push(p);
+    }
+    // Always include current pins
+    if (!pins.includes(cur[0])) pins.unshift(cur[0]);
+    if (!pins.includes(cur[1])) pins.push(cur[1]);
+    return pins.slice(0, 9);
+  }, [step, seq, cur, total]);
+
+  const H = {
+    topBar: 52,
+    board: boardSz,
+    progressBar: 44,
+    pinStrip: 68,
+    transport: 88,
+  };
+
   return (
-    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: C.bgDeep, fontFamily: "system-ui,sans-serif", overflow: "hidden" }}>
-      {/* Top bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", height: 52, background: C.bgDark, borderBottom: `1px solid ${C.borderDark}`, flexShrink: 0 }}>
-        <button onClick={onBack} style={{ ...BTN.ghost, padding: "8px 16px", fontSize: 14 }}>← Back</button>
-        <span style={{ fontWeight: 700, fontSize: 15, color: C.textWhite, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, textAlign: "center", margin: "0 12px" }}>{project.name}</span>
-        <span style={{ fontSize: 10, background: C.goldDim, color: C.gold, border: `1px solid ${C.goldBorder}`, borderRadius: 8, padding: "4px 10px", fontWeight: 600 }}>Shared</span>
+    <div style={{
+      height: "100dvh", width: "100vw",
+      display: "flex", flexDirection: "column",
+      background: C.bgDeep, fontFamily: "system-ui,sans-serif",
+      overflow: "hidden",
+    }}>
+
+      {/* ── Top bar ── */}
+      <div style={{
+        height: H.topBar, flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "0 16px",
+        background: "rgba(0,0,0,0.3)",
+      }}>
+        <button onClick={onBack} style={{
+          background: "rgba(255,255,255,0.1)", border: `1px solid ${C.borderDark}`,
+          color: C.textWhite, borderRadius: 10, padding: "8px 16px",
+          fontSize: 15, fontWeight: 600, cursor: "pointer",
+        }}>← Back</button>
+        <span style={{
+          fontWeight: 700, fontSize: 16, color: C.textWhite,
+          flex: 1, textAlign: "center", margin: "0 12px",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>{project.name}</span>
+        <span style={{
+          fontSize: 11, background: C.goldDim, color: C.gold,
+          border: `1px solid ${C.goldBorder}`, borderRadius: 8,
+          padding: "4px 10px", fontWeight: 700,
+        }}>SHARED</span>
       </div>
 
-      {/* Canvas */}
-      <div style={{ flexShrink: 0, padding: "12px 12px 6px" }}>
-        <Board sequence={seq} step={step} view={view} onView={setView} />
+      {/* ── Board — centred, fixed square ── */}
+      <div style={{
+        flexShrink: 0, height: boardSz + 16,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "8px 0",
+      }}>
+        <Board sequence={seq} step={step} sz={boardSz} />
       </div>
 
-      {/* Controls panel — white bottom sheet */}
-      <div style={{ flex: 1, background: C.bgLight, borderRadius: "22px 22px 0 0", overflowY: "auto", WebkitOverflowScrolling: "touch", boxShadow: "0 -4px 30px rgba(0,0,0,0.3)" }}>
-        {/* Drag handle */}
-        <div style={{ display: "flex", justifyContent: "center", padding: "12px 0 4px" }}>
-          <div style={{ width: 40, height: 4, background: "#e2e8f0", borderRadius: 2 }} />
+      {/* ── Progress bar + step counter ── */}
+      <div style={{ flexShrink: 0, padding: "0 20px", height: H.progressBar, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
+        {/* Track */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.1)", borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${C.gold}, ${C.goldBright})`, borderRadius: 3, transition: "width .15s", boxShadow: `0 0 6px rgba(201,168,76,0.5)` }} />
+          </div>
+          {/* Fast forward to end */}
+          <button onClick={() => setStep(total)} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 18, cursor: "pointer", padding: "0 4px" }}>⏭</button>
         </div>
-        <div style={{ padding: "8px 20px 36px" }}>
-          {/* Step counter + current */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ fontSize: 42, fontWeight: 800, fontFamily: "monospace", color: C.textDark, lineHeight: 1 }}>{step.toLocaleString()}</span>
-              <span style={{ fontSize: 15, color: "#94a3b8", fontFamily: "monospace" }}>/ {total.toLocaleString()}</span>
+        {/* Step counter */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 14, color: C.gold, fontWeight: 700 }}>
+            {step.toLocaleString()} / {total.toLocaleString()}
+          </span>
+          <span style={{ fontFamily: "monospace", fontSize: 13, color: C.textMuted }}>{pct}%</span>
+        </div>
+      </div>
+
+      {/* ── Pin strip — scrollable horizontal strip of upcoming pins ── */}
+      <div style={{
+        flexShrink: 0, height: H.pinStrip,
+        display: "flex", alignItems: "center",
+        padding: "0 16px", gap: 8,
+        overflowX: "auto", scrollbarWidth: "none",
+      }}>
+        {pinStrip.map((pin, idx) => {
+          const isCurrent = cur && (pin === cur[0] || pin === cur[1]);
+          return (
+            <div key={idx} style={{
+              flexShrink: 0,
+              width: isCurrent ? 60 : 50,
+              height: isCurrent ? 60 : 50,
+              borderRadius: 14,
+              background: isCurrent
+                ? `linear-gradient(135deg, rgba(201,168,76,0.3), rgba(240,192,96,0.15))`
+                : "rgba(255,255,255,0.07)",
+              border: isCurrent ? `2px solid ${C.gold}` : `1px solid ${C.borderDark}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "monospace", fontWeight: isCurrent ? 800 : 600,
+              fontSize: isCurrent ? 18 : 15,
+              color: isCurrent ? C.goldBright : C.textMuted,
+              boxShadow: isCurrent ? `0 0 16px rgba(201,168,76,0.3)` : "none",
+              transition: "all .2s",
+            }}>
+              {pin}
             </div>
-            <div style={{ background: "#fefce8", border: "1.5px solid #fde68a", borderRadius: 12, padding: "10px 14px", textAlign: "right" }}>
-              <div style={{ fontSize: 9, color: "#92400e", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Current</div>
-              <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "monospace", color: "#92400e" }}>{cur ? `${cur[0]} → ${cur[1]}` : "—"}</div>
-            </div>
-          </div>
+          );
+        })}
+        {pinStrip.length === 0 && (
+          <span style={{ color: C.textMuted, fontSize: 13 }}>Start playing to see pins</span>
+        )}
+      </div>
 
-          {/* Progress bar */}
-          <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, overflow: "hidden", marginBottom: 5 }}>
-            <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${C.gold}, ${C.goldBright})`, borderRadius: 4, transition: "width .2s", boxShadow: `0 0 8px rgba(201,168,76,0.5)` }} />
-          </div>
-          <div style={{ fontSize: 12, fontFamily: "monospace", color: "#94a3b8", marginBottom: 20 }}>{pct}% complete</div>
+      {/* ── Transport + interval + jump ── */}
+      <div style={{
+        flex: 1, display: "flex", flexDirection: "column",
+        justifyContent: "space-evenly", padding: "0 20px 12px",
+      }}>
+        {/* Main transport buttons */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14 }}>
+          {/* Interval selector (left of transport) */}
+          <select value={intervalSec} onChange={e => setIntervalSec(Number(e.target.value))}
+            style={{
+              background: "rgba(255,255,255,0.08)", border: `1px solid ${C.borderDark}`,
+              color: C.textLight, borderRadius: 12, padding: "10px 10px",
+              fontSize: 14, fontFamily: "monospace", outline: "none",
+              width: 64, textAlign: "center",
+            }}>
+            {INTERVALS.map(s => <option key={s} value={s}>{s}s</option>)}
+          </select>
 
-          {/* Slider */}
-          <input type="range" min={0} max={total} value={step} onChange={e => setStep(Number(e.target.value))} style={{ width: "100%", marginBottom: 22, accentColor: C.gold, height: 6 }} />
+          <button onClick={() => setStep(s => Math.max(0, s-1))}
+            style={{ ...BTN.ghost, width: 54, height: 54, borderRadius: 16, fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", border: `1.5px solid ${C.borderDark}` }}>◀</button>
 
-          {/* Transport buttons */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 22 }}>
-            <button onClick={() => setStep(s => Math.max(0, s-1))}
-              style={{ ...BTN.light, width: 56, height: 56, borderRadius: 14, fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}>⏮</button>
-            <button onClick={() => setPlaying(p => !p)}
-              style={{ ...BTN.gold, width: 72, height: 72, borderRadius: 20, fontSize: 28, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {playing ? "⏸" : "▶"}
-            </button>
-            <button onClick={() => setStep(s => Math.min(total, s+1))}
-              style={{ ...BTN.light, width: 56, height: 56, borderRadius: 14, fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}>⏭</button>
-            <button onClick={() => { setPlaying(false); setStep(0); }}
-              style={{ ...BTN.light, width: 56, height: 56, borderRadius: 14, fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}>🔄</button>
-          </div>
+          <button onClick={() => setPlaying(p => !p)}
+            style={{ ...BTN.gold, width: 72, height: 72, borderRadius: 22, fontSize: 30, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {playing ? "⏸" : "▶"}
+          </button>
 
-          {/* Interval */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 14, marginBottom: 14 }}>
-            <span style={{ fontSize: 14, color: C.textDark, fontWeight: 600 }}>Auto-step interval</span>
-            <select value={intervalSec} onChange={e => setIntervalSec(Number(e.target.value))}
-              style={{ padding: "8px 14px", border: "1.5px solid #e2e8f0", borderRadius: 10, fontSize: 15, background: "#fff", color: C.textDark, fontWeight: 600, outline: "none" }}>
-              {INTERVALS.map(s => <option key={s} value={s}>{s}s</option>)}
-            </select>
-          </div>
+          <button onClick={() => setStep(s => Math.min(total, s+1))}
+            style={{ ...BTN.ghost, width: 54, height: 54, borderRadius: 16, fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", border: `1.5px solid ${C.borderDark}` }}>▶</button>
 
-          {/* Jump */}
-          <div style={{ display: "flex", gap: 10 }}>
-            <input value={jump} onChange={e => setJump(e.target.value)} placeholder="Jump to step #" inputMode="numeric"
-              onKeyDown={e => e.key === "Enter" && setStep(Math.max(0, Math.min(total, parseInt(jump,10)||0)))}
-              style={{ flex: 1, padding: "14px 16px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 15, fontFamily: "monospace", outline: "none", background: "#fff", color: C.textDark }} />
-            <button onClick={() => setStep(Math.max(0, Math.min(total, parseInt(jump,10)||0)))}
-              style={{ ...BTN.gold, padding: "14px 22px", fontSize: 15, borderRadius: 12 }}>Go</button>
-          </div>
+          {/* Restart */}
+          <button onClick={() => { setPlaying(false); setStep(0); }}
+            style={{ ...BTN.ghost, width: 54, height: 54, borderRadius: 16, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", border: `1.5px solid ${C.borderDark}` }}>🔄</button>
+        </div>
+
+        {/* Jump to step */}
+        <div style={{ display: "flex", gap: 10 }}>
+          <input value={jump} onChange={e => setJump(e.target.value)}
+            placeholder="Jump to step #" inputMode="numeric"
+            onKeyDown={e => e.key === "Enter" && setStep(Math.max(0, Math.min(total, parseInt(jump,10)||0)))}
+            style={{
+              flex: 1, padding: "13px 16px",
+              background: "rgba(255,255,255,0.07)", border: `1.5px solid ${C.borderDark}`,
+              borderRadius: 12, fontSize: 15, fontFamily: "monospace",
+              outline: "none", color: C.textWhite,
+            }} />
+          <button onClick={() => setStep(Math.max(0, Math.min(total, parseInt(jump,10)||0)))}
+            style={{ ...BTN.gold, padding: "13px 22px", fontSize: 15, borderRadius: 12 }}>Go</button>
         </div>
       </div>
     </div>
   );
 }
+
 
 // ── Owner gate ─────────────────────────────────────────────────────────────────
 function OwnerGate({ onPassed, onBack }) {
@@ -930,7 +1023,7 @@ function Editor({ project: initialProject, onBack }) {
                 <p style={{ margin: 0, fontSize: 14 }}>Add connections in the Input tab.</p>
                 <button onClick={() => setTab("input")} style={{ ...BTN.gold, padding: "11px 24px", fontSize: 14, borderRadius: 12 }}>Add connections</button>
               </div>
-            : <Board sequence={seq} step={step} view={view} onView={setView} />
+            : <Board sequence={seq} step={step} sz={Math.min(typeof window!=="undefined"?window.innerWidth:400, 400) - 24} />
           }
           {seq.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
