@@ -447,6 +447,40 @@ function PublicViewer({ project, onBack }) {
   const [jump, setJump] = useState("");
   const pct = total ? ((step / total) * 100).toFixed(1) : "0.0";
   const cur = (step > 0 && step <= total) ? seq[step-1] : null;
+  const stepRef = useRef(step); // always holds latest step for cleanup
+  const saveTimer = useRef(null);
+
+  // Keep stepRef in sync
+  useEffect(() => { stepRef.current = step; }, [step]);
+
+  // Save step to DB — debounced so it doesn't fire on every single tap
+  const saveStep = useCallback((s) => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api(`/api/projects/${project.id}`, "PATCH", { step: s, last_opened: new Date().toISOString() });
+    }, 800);
+  }, [project.id]);
+
+  // Save whenever step changes
+  useEffect(() => { saveStep(step); }, [step, saveStep]);
+
+  // Save immediately when leaving (Back button or page unload)
+  const handleBack = useCallback(() => {
+    clearTimeout(saveTimer.current);
+    api(`/api/projects/${project.id}`, "PATCH", { step: stepRef.current, last_opened: new Date().toISOString() });
+    onBack();
+  }, [project.id, onBack]);
+
+  useEffect(() => {
+    const onUnload = () => {
+      api(`/api/projects/${project.id}`, "PATCH", { step: stepRef.current });
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      clearTimeout(saveTimer.current);
+    };
+  }, [project.id]);
 
   // Board size: compute once from window, stable square that fills available width
   const [boardSz, setBoardSz] = useState(() => {
@@ -513,7 +547,7 @@ function PublicViewer({ project, onBack }) {
         padding: "0 16px",
         background: "rgba(0,0,0,0.3)",
       }}>
-        <button onClick={onBack} style={{
+        <button onClick={handleBack} style={{
           background: "rgba(255,255,255,0.1)", border: `1px solid ${C.borderDark}`,
           color: C.textWhite, borderRadius: 10, padding: "8px 16px",
           fontSize: 15, fontWeight: 600, cursor: "pointer",
