@@ -203,26 +203,31 @@ function Board({ sequence, step, sz: szProp }) {
     const ctx = c.getContext("2d");
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
     applyXform(ctx); paintBoard(ctx);
-    // Light black threads
-    ctx.lineWidth = 0.75; ctx.strokeStyle = "rgba(30,30,50,0.22)"; ctx.lineCap = "round";
-    ctx.beginPath();
+    // Each thread drawn individually so overlaps compound and darken — forming the picture
+    ctx.lineWidth = 0.8; ctx.lineCap = "round";
     for (let i = 0; i < upto; i++) {
       const [a, b] = sequence[i];
+      ctx.strokeStyle = "rgba(20,20,35,0.18)";
+      ctx.beginPath();
       ctx.moveTo(pins[a-1][0], pins[a-1][1]); ctx.lineTo(pins[b-1][0], pins[b-1][1]);
+      ctx.stroke();
     }
-    ctx.stroke(); committedTo.current = upto;
+    committedTo.current = upto;
   }, [applyXform, paintBoard, pins, sequence]);
 
   const appendBase = useCallback((from, to) => {
     const c = baseRef.current; if (!c) return;
     const ctx = c.getContext("2d"); applyXform(ctx);
-    ctx.lineWidth = 0.75; ctx.strokeStyle = "rgba(30,30,50,0.22)"; ctx.lineCap = "round";
-    ctx.beginPath();
+    // Each thread drawn individually so overlaps compound and darken
+    ctx.lineWidth = 0.8; ctx.lineCap = "round";
     for (let i = from; i < to; i++) {
       const [a, b] = sequence[i];
+      ctx.strokeStyle = "rgba(20,20,35,0.18)";
+      ctx.beginPath();
       ctx.moveTo(pins[a-1][0], pins[a-1][1]); ctx.lineTo(pins[b-1][0], pins[b-1][1]);
+      ctx.stroke();
     }
-    ctx.stroke(); committedTo.current = to;
+    committedTo.current = to;
   }, [applyXform, pins, sequence]);
 
   useEffect(() => {
@@ -294,11 +299,16 @@ function MiniBoard({ seq }) {
     ctx.strokeStyle = "rgba(0,0,0,0.07)"; ctx.lineWidth = 1; ctx.stroke();
     if (!seq || !seq.length) return;
     const pts = pinPositions(PIN_COUNT, R - 4, cxc, cyc);
-    // Light black threads
-    ctx.strokeStyle = "rgba(30,30,50,0.22)"; ctx.lineWidth = 0.5; ctx.beginPath();
+    // Individual strokes so overlaps compound and form the picture
+    ctx.lineWidth = 0.5; ctx.lineCap = "round";
     const max = Math.min(seq.length, 3000);
-    for (let i = 0; i < max; i++) { const [a, b] = seq[i]; ctx.moveTo(pts[a-1][0], pts[a-1][1]); ctx.lineTo(pts[b-1][0], pts[b-1][1]); }
-    ctx.stroke();
+    for (let i = 0; i < max; i++) {
+      const [a, b] = seq[i];
+      ctx.strokeStyle = "rgba(20,20,35,0.18)";
+      ctx.beginPath();
+      ctx.moveTo(pts[a-1][0], pts[a-1][1]); ctx.lineTo(pts[b-1][0], pts[b-1][1]);
+      ctx.stroke();
+    }
   }, [seq]);
   return <canvas ref={ref} width={200} height={200} style={{ width: "100%", height: "100%", display: "block" }} />;
 }
@@ -474,20 +484,11 @@ function PublicViewer({ project, onBack }) {
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, [total]);
 
-  // Build pin strip — show current pin and 3 on each side
-  const pinStrip = useMemo(() => {
-    if (!cur) return [];
-    const pins = [];
-    // Collect unique pins from nearby steps
-    for (let i = Math.max(0, step - 4); i < Math.min(total, step + 4); i++) {
-      const p = seq[i][i === step - 1 ? 1 : 0];
-      if (!pins.includes(p)) pins.push(p);
-    }
-    // Always include current pins
-    if (!pins.includes(cur[0])) pins.unshift(cur[0]);
-    if (!pins.includes(cur[1])) pins.push(cur[1]);
-    return pins.slice(0, 9);
-  }, [step, seq, cur, total]);
+  // Destination pin = where to wind next (cur[1])
+  // Next-up pin = the destination of the step after current
+  const destPin = cur ? cur[1] : null;
+  const nextStep = (step < total) ? seq[step] : null;
+  const nextPin = nextStep ? nextStep[1] : null;
 
   const H = {
     topBar: 52,
@@ -557,38 +558,50 @@ function PublicViewer({ project, onBack }) {
         </div>
       </div>
 
-      {/* ── Pin strip — scrollable horizontal strip of upcoming pins ── */}
+      {/* ── Pin display — centered, shows destination pin large + next pin small ── */}
       <div style={{
         flexShrink: 0, height: H.pinStrip,
-        display: "flex", alignItems: "center",
-        padding: "0 16px", gap: 8,
-        overflowX: "auto", scrollbarWidth: "none",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        gap: 16,
       }}>
-        {pinStrip.map((pin, idx) => {
-          const isCurrent = cur && (pin === cur[0] || pin === cur[1]);
-          return (
-            <div key={idx} style={{
-              flexShrink: 0,
-              width: isCurrent ? 60 : 50,
-              height: isCurrent ? 60 : 50,
-              borderRadius: 14,
-              background: isCurrent
-                ? `linear-gradient(135deg, rgba(201,168,76,0.3), rgba(240,192,96,0.15))`
-                : "rgba(255,255,255,0.07)",
-              border: isCurrent ? `2px solid ${C.gold}` : `1px solid ${C.borderDark}`,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontFamily: "monospace", fontWeight: isCurrent ? 800 : 600,
-              fontSize: isCurrent ? 18 : 15,
-              color: isCurrent ? C.goldBright : C.textMuted,
-              boxShadow: isCurrent ? `0 0 16px rgba(201,168,76,0.3)` : "none",
-              transition: "all .2s",
+        {destPin !== null ? (
+          <>
+            {/* Destination pin — large and centered */}
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
             }}>
-              {pin}
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>Go to pin</span>
+              <div style={{
+                width: 72, height: 72, borderRadius: 20,
+                background: `linear-gradient(135deg, rgba(201,168,76,0.25), rgba(240,192,96,0.12))`,
+                border: `2.5px solid ${C.gold}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: "monospace", fontWeight: 900,
+                fontSize: 30, color: C.goldBright,
+                boxShadow: `0 0 24px rgba(201,168,76,0.35)`,
+              }}>
+                {destPin}
+              </div>
             </div>
-          );
-        })}
-        {pinStrip.length === 0 && (
-          <span style={{ color: C.textMuted, fontSize: 13 }}>Start playing to see pins</span>
+            {/* Next pin preview */}
+            {nextPin !== null && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.1em" }}>then</span>
+                <div style={{
+                  width: 52, height: 52, borderRadius: 14,
+                  background: "rgba(255,255,255,0.06)",
+                  border: `1.5px solid ${C.borderDark}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: "monospace", fontWeight: 700,
+                  fontSize: 20, color: C.textMuted,
+                }}>
+                  {nextPin}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <span style={{ color: C.textMuted, fontSize: 14 }}>Press play to begin</span>
         )}
       </div>
 
