@@ -447,40 +447,59 @@ function PublicViewer({ project, onBack }) {
   const [jump, setJump] = useState("");
   const pct = total ? ((step / total) * 100).toFixed(1) : "0.0";
   const cur = (step > 0 && step <= total) ? seq[step-1] : null;
-  const stepRef = useRef(step); // always holds latest step for cleanup
+  const stepRef = useRef(step);
   const saveTimer = useRef(null);
+  const progressUrl = `/api/projects/${project.id}/progress`;
 
-  // Keep stepRef in sync
+  // Always keep stepRef current
   useEffect(() => { stepRef.current = step; }, [step]);
 
-  // Save step to DB — debounced so it doesn't fire on every single tap
+  // The one save function used everywhere
+  const doSave = useCallback((s, sync = false) => {
+    const body = JSON.stringify({ step: s });
+    if (sync && navigator.sendBeacon) {
+      // sendBeacon is the ONLY reliable way to save on mobile page close/back
+      const blob = new Blob([body], { type: "application/json" });
+      navigator.sendBeacon(progressUrl, blob);
+    } else {
+      fetch(progressUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      }).catch(() => {});
+    }
+  }, [progressUrl]);
+
+  // Debounced save while stepping through
   const saveStep = useCallback((s) => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      api(`/api/projects/${project.id}/progress`, "PATCH", { step: s, last_opened: new Date().toISOString() });
-    }, 800);
-  }, [project.id]);
+    saveTimer.current = setTimeout(() => doSave(s), 1000);
+  }, [doSave]);
 
-  // Save whenever step changes
   useEffect(() => { saveStep(step); }, [step, saveStep]);
 
-  // Save immediately when leaving (Back button or page unload)
+  // Back button — cancel debounce, save immediately, then navigate
   const handleBack = useCallback(() => {
     clearTimeout(saveTimer.current);
-    api(`/api/projects/${project.id}/progress`, "PATCH", { step: stepRef.current, last_opened: new Date().toISOString() });
+    doSave(stepRef.current, true);
     onBack();
-  }, [project.id, onBack]);
+  }, [doSave, onBack]);
 
+  // Page close / refresh / browser back gesture — sendBeacon is required here
   useEffect(() => {
-    const onUnload = () => {
-      api(`/api/projects/${project.id}/progress`, "PATCH", { step: stepRef.current });
-    };
+    const onUnload = () => doSave(stepRef.current, true);
+    const onVisChange = () => { if (document.visibilityState === "hidden") doSave(stepRef.current, true); };
     window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("pagehide", onUnload);         // iOS Safari fires this not beforeunload
+    document.addEventListener("visibilitychange", onVisChange); // fires when app goes to background
     return () => {
-      window.removeEventListener("beforeunload", onUnload);
       clearTimeout(saveTimer.current);
+      doSave(stepRef.current, true); // also save on component unmount
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
+      document.removeEventListener("visibilitychange", onVisChange);
     };
-  }, [project.id]);
+  }, [doSave]);
 
   // Board size: compute once from window, stable square that fills available width
   const [boardSz, setBoardSz] = useState(() => {
