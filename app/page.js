@@ -457,7 +457,7 @@ function PublicViewer({ project, onBack }) {
   const saveStep = useCallback((s) => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      api(`/api/projects/${project.id}`, "PATCH", { step: s, last_opened: new Date().toISOString() });
+      api(`/api/projects/${project.id}/progress`, "PATCH", { step: s, last_opened: new Date().toISOString() });
     }, 800);
   }, [project.id]);
 
@@ -467,13 +467,13 @@ function PublicViewer({ project, onBack }) {
   // Save immediately when leaving (Back button or page unload)
   const handleBack = useCallback(() => {
     clearTimeout(saveTimer.current);
-    api(`/api/projects/${project.id}`, "PATCH", { step: stepRef.current, last_opened: new Date().toISOString() });
+    api(`/api/projects/${project.id}/progress`, "PATCH", { step: stepRef.current, last_opened: new Date().toISOString() });
     onBack();
   }, [project.id, onBack]);
 
   useEffect(() => {
     const onUnload = () => {
-      api(`/api/projects/${project.id}`, "PATCH", { step: stepRef.current });
+      api(`/api/projects/${project.id}/progress`, "PATCH", { step: stepRef.current });
     };
     window.addEventListener("beforeunload", onUnload);
     return () => {
